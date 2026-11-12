@@ -1,0 +1,28 @@
+name = "neversleep-relay"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+
+# Static, mobile-friendly dashboard. Requests that do not match a file fall through to the Worker.
+[assets]
+directory = "./public"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*"]
+
+# Hub: login rate limits, pairing codes, device registry (one instance).
+[[durable_objects.bindings]]
+name = "HUB"
+class_name = "Hub"
+
+# Device: one instance per paired Mac. Holds the Mac's WebSocket and its last state.
+[[durable_objects.bindings]]
+name = "DEVICE"
+class_name = "Device"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Hub", "Device"]
+
+# Secrets (set with `npx wrangler secret put <NAME>`, never committed):
+#   SESSION_SECRET      - random string (32+ chars) used to sign browser session cookies
+# There is no dashboard password: browsers sign in with one-time codes shown on the Mac.

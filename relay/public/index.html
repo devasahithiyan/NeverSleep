@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>NeverSleep</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <h1>NeverSleep</h1>
+    <div class="top-actions">
+      <select id="devicePicker" hidden aria-label="Mac"></select>
+      <button id="logoutBtn" class="ghost" hidden>Sign out</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="signInView" hidden>
+      <div class="card narrow">
+        <h2>Sign in with a code from your Mac</h2>
+        <p>Click the NeverSleep menu bar icon on your Mac:</p>
+        <ul class="steps">
+          <li><b>Not paired yet?</b> Settings… › Remote › <b>Pair this Mac</b>.</li>
+          <li><b>Already paired?</b> <b>Show code to sign in a browser</b>.</li>
+        </ul>
+        <p>Then type the 8-character code here. Codes work once and expire after 10 minutes.</p>
+        <form id="codeForm" class="pair-form">
+          <input name="code" placeholder="ABCD-EFGH" autocomplete="one-time-code" autocapitalize="characters" maxlength="9" required>
+          <button type="submit">Sign in</button>
+        </form>
+        <p class="error pair-error" role="alert"></p>
+      </div>
+    </section>
+
+    <section id="deviceView" hidden>
+      <div class="status-bar">
+        <span id="onlineDot" class="dot"></span>
+        <span id="onlineText"></span>
+        <span id="lastSeen" class="muted"></span>
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <h2>Battery</h2>
+          <div class="big" id="batteryPct">–</div>
+          <div class="meter"><div id="batteryBar"></div></div>
+          <p id="batteryDetail" class="muted"></p>
+          <p id="thermal" class="muted"></p>
+        </div>
+
+        <div class="card">
+          <h2>Lid mode</h2>
+          <label class="switch-row">
+            <span>Keep allowed apps running with the lid closed</span>
+            <input type="checkbox" id="lidModeToggle" role="switch">
+          </label>
+          <p>Lid: <b id="lidState">–</b></p>
+          <p>Phase: <b id="phase">–</b> <span id="phaseReason" class="muted"></span></p>
+          <p id="lidError" class="error"></p>
+          <p id="helperWarn" class="warn" hidden>The privileged helper isn't approved on this Mac, so lid mode can't keep it awake.</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="row-head">
+          <h2>Running apps</h2>
+          <span class="muted" id="appCount"></span>
+        </div>
+        <ul id="appList" class="app-list"></ul>
+      </div>
+
+      <div class="card">
+        <h2>Open an app</h2>
+        <input id="launchSearch" type="search" placeholder="Search installed apps…" autocomplete="off">
+        <ul id="launchList" class="app-list compact"></ul>
+      </div>
+
+      <div class="card">
+        <div class="row-head">
+          <h2>Allow-list</h2>
+          <button id="saveAllow" disabled>Save</button>
+        </div>
+        <p class="muted">Checked apps keep running while the lid is closed. Everything else is paused.</p>
+        <input id="allowSearch" type="search" placeholder="Filter…" autocomplete="off">
+        <ul id="allowList" class="app-list compact"></ul>
+      </div>
+
+      <details class="card">
+        <summary>Devices</summary>
+        <p class="muted">To add another Mac, type a code from that Mac:</p>
+        <form id="pairForm" class="pair-form">
+          <input name="code" placeholder="ABCD-EFGH" autocomplete="off" autocapitalize="characters" maxlength="9" required>
+          <button type="submit">Add</button>
+        </form>
+        <p class="error pair-error" role="alert"></p>
+        <button id="removeDevice" class="danger">Remove this Mac</button>
+      </details>
+    </section>
+  </main>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

@@ -1,0 +1,11 @@
+.DS_Store
+mac/.build/
+mac/build/
+relay/node_modules/
+relay/.wrangler/
+relay/.dev.vars
+relay/.dashboard-password
+*.p12
+*.pem
+.env
+.claude/
