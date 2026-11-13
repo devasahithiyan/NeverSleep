@@ -16,8 +16,12 @@ enum Watchdog {
         }
         let store = FileStateStore(url: stateFile)
         var state = store.load()
+        if !state.paused.isEmpty {
+            ActivityLog.appendLine(kind: "watchdog", message: "NeverSleep (pid \(parentPID)) exited with \(state.paused.count) app(s) paused; resuming them")
+        }
         for rec in state.paused where ProcessInfoReader.startTime(of: rec.pid) == rec.startTime {
-            kill(rec.pid, SIGCONT)
+            let ok = kill(rec.pid, SIGCONT) == 0
+            ActivityLog.appendLine(kind: "watchdog", message: "Resumed \(rec.name) [\(rec.bundleID ?? "-")] pid \(rec.pid)\(ok ? "" : " (failed)")")
         }
         if !state.paused.isEmpty {
             state.paused = []

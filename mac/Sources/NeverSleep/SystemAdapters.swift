@@ -13,6 +13,15 @@ enum ProcessInfoReader {
     }
 }
 
+extension ProcessInfoReader {
+    static func parentPID(of pid: Int32) -> Int32? {
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
+        return Int32(bitPattern: info.pbi_ppid)
+    }
+}
+
 /// JSON file in ~/Library/Application Support/NeverSleep/state.json, written atomically.
 final class FileStateStore: StateStore {
     let url: URL
@@ -46,6 +55,7 @@ final class SystemProcessController: ProcessControlling {
     }
 
     func startTime(of pid: Int32) -> UInt64? { ProcessInfoReader.startTime(of: pid) }
+    func parentPID(of pid: Int32) -> Int32? { ProcessInfoReader.parentPID(of: pid) }
 
     func sendStop(_ pid: Int32) -> Bool { kill(pid, SIGSTOP) == 0 }
     func sendCont(_ pid: Int32) -> Bool { kill(pid, SIGCONT) == 0 }

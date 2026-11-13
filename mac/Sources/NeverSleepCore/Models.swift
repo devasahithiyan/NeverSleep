@@ -74,6 +74,10 @@ public struct LidModeConfig: Equatable, Sendable {
     public var quitInsteadOfPause: Set<String> = []
     public var batteryCutoffPercent: Int = 20
     public var sleepDisplayOnEngage: Bool = true
+    /// Keep `disablesleep 1` on for the whole time lid mode is armed, not only after the lid
+    /// closes. This removes the race where macOS starts clamshell sleep before the helper call
+    /// lands. Cost: the Mac does not idle-sleep while armed (the safety cutoffs still apply).
+    public var keepAwakeWhileArmed: Bool = true
     /// Bundle IDs that are never signalled even if they are not on the allow-list.
     public var protectedBundleIDs: Set<String> = LidModeConfig.defaultProtected
     /// PIDs that are never signalled (our own app, our watchdog).
@@ -94,4 +98,14 @@ public struct LidModeConfig: Equatable, Sendable {
     ]
 
     public init() {}
+}
+
+/// One line for the activity log. `kind` is a short category ("lid", "sleep", "app", ...).
+public struct ActivityEvent: Equatable, Sendable {
+    public let kind: String
+    public let message: String
+    public init(_ kind: String, _ message: String) {
+        self.kind = kind
+        self.message = message
+    }
 }

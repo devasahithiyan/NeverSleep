@@ -26,6 +26,14 @@ final class Prefs {
         get { d.object(forKey: "sleepDisplay") as? Bool ?? true }
         set { d.set(newValue, forKey: "sleepDisplay") }
     }
+    var keepAwakeWhileArmed: Bool {
+        get { d.object(forKey: "keepAwakeWhileArmed") as? Bool ?? true }
+        set { d.set(newValue, forKey: "keepAwakeWhileArmed") }
+    }
+    var openAtLogin: Bool {
+        get { d.object(forKey: "openAtLogin") as? Bool ?? true }
+        set { d.set(newValue, forKey: "openAtLogin") }
+    }
     var lidModeEnabled: Bool {
         get { d.bool(forKey: "lidModeEnabled") }
         set { d.set(newValue, forKey: "lidModeEnabled") }
@@ -53,6 +61,8 @@ final class AppModel: ObservableObject, RelayHandler {
     @Published var quitInsteadOfPause: Set<String> = []
     @Published var batteryCutoff: Int = 20
     @Published var sleepDisplay = true
+    @Published var keepAwakeWhileArmed = true
+    @Published var openAtLogin = true
     @Published var lidModeEnabled = false
     @Published var simulateLidClosed = false
     @Published private(set) var realLidClosed = false
@@ -79,6 +89,8 @@ final class AppModel: ObservableObject, RelayHandler {
         quitInsteadOfPause = prefs.quitInsteadOfPause
         batteryCutoff = prefs.batteryCutoff
         sleepDisplay = prefs.sleepDisplay
+        keepAwakeWhileArmed = prefs.keepAwakeWhileArmed
+        openAtLogin = prefs.openAtLogin
         lidModeEnabled = prefs.lidModeEnabled
         relayURLDraft = relay.credentials?.relayURL ?? prefs.relayURL
     }
@@ -88,6 +100,11 @@ final class AppModel: ObservableObject, RelayHandler {
     func start() {
         guard !started else { return }
         started = true
+        let log = ActivityLog.shared
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+        log.record("app", "NeverSleep \(version) started (pid \(getpid())). Helper: \(helper.statusText). Lid mode \(lidModeEnabled ? "on" : "off"), keep awake while armed: \(keepAwakeWhileArmed ? "on" : "off"). Allow-list: \(allowList.sorted().joined(separator: ", ").isEmpty ? "(empty)" : allowList.sorted().joined(separator: ", "))")
+        engine.onEvent = { ActivityLog.shared.record($0.kind, $0.message) }
+        LoginItem.sync(enabled: openAtLogin)
 
         // Keep timers and the WebSocket responsive while the lid is closed (no App Nap).
         activity = ProcessInfo.processInfo.beginActivity(
@@ -108,19 +125,24 @@ final class AppModel: ObservableObject, RelayHandler {
             engine.setEnabled(lidModeEnabled)
         }
 
-        lid.onChange = { [weak self] closed in
+        lid.onChange = { [weak self] closed, source in
             Task { @MainActor in
+                ActivityLog.shared.record("lid", "Lid \(closed ? "closed" : "opened") (detected by \(source))")
                 self?.realLidClosed = closed
                 self?.pushLid()
             }
         }
         lid.start()
         realLidClosed = lid.isClosed
+        log.record("lid", LidMonitor.hasLid ? "Lid is \(lid.isClosed ? "closed" : "open") at startup (AppleClamshellState)" : "No lid sensor found (AppleClamshellState missing)")
         pushLid()
 
         power.onBattery = { [weak self] info in
             Task { @MainActor in
                 guard let self else { return }
+                if info.present && info.onAC != self.battery.onAC {
+                    ActivityLog.shared.record("power", "Now on \(info.onAC ? "AC power" : "battery") (\(info.percent.map { "\($0)%" } ?? "?"))")
+                }
                 self.battery = info
                 self.engine.updatePower(info.powerReading)
                 self.stateChanged()
@@ -128,6 +150,7 @@ final class AppModel: ObservableObject, RelayHandler {
         }
         power.onThermal = { [weak self] level in
             Task { @MainActor in
+                if self?.thermal != level { ActivityLog.shared.record("power", "Thermal state: \(level.name)") }
                 self?.thermal = level
                 self?.engine.updateThermal(level)
                 self?.stateChanged()
@@ -162,7 +185,8 @@ final class AppModel: ObservableObject, RelayHandler {
 
     // MARK: Settings mutations
 
-    func setLidMode(_ on: Bool) {
+    func setLidMode(_ on: Bool, source: String = "menu") {
+        if on != lidModeEnabled { ActivityLog.shared.record("mode", "Lid mode switched \(on ? "on" : "off") from \(source)") }
         lidModeEnabled = on
         prefs.lidModeEnabled = on
         engine.setEnabled(on)
@@ -170,6 +194,7 @@ final class AppModel: ObservableObject, RelayHandler {
     }
 
     func setSimulateLidClosed(_ on: Bool) {
+        if on != simulateLidClosed { ActivityLog.shared.record("lid", "Simulate lid closed \(on ? "ON" : "OFF")") }
         simulateLidClosed = on
         pushLid()
     }
@@ -199,6 +224,21 @@ final class AppModel: ObservableObject, RelayHandler {
         engine.updatePower(battery.powerReading)
     }
 
+    func setKeepAwakeWhileArmed(_ on: Bool) {
+        keepAwakeWhileArmed = on
+        prefs.keepAwakeWhileArmed = on
+        ActivityLog.shared.record("mode", "Keep awake while armed: \(on ? "on" : "off")")
+        applyConfig()
+        engine.reevaluate()
+    }
+
+    func setOpenAtLogin(_ on: Bool) {
+        openAtLogin = on
+        prefs.openAtLogin = on
+        LoginItem.sync(enabled: on)
+        ActivityLog.shared.record("app", "Open at login: \(on ? "on" : "off")")
+    }
+
     func setSleepDisplay(_ on: Bool) {
         sleepDisplay = on
         prefs.sleepDisplay = on
@@ -211,6 +251,7 @@ final class AppModel: ObservableObject, RelayHandler {
         c.quitInsteadOfPause = quitInsteadOfPause
         c.batteryCutoffPercent = batteryCutoff
         c.sleepDisplayOnEngage = sleepDisplay
+        c.keepAwakeWhileArmed = keepAwakeWhileArmed
         if let w = watchdog { c.protectedPIDs.insert(w.processIdentifier) }
         engine.config = c
         stateChanged()
@@ -235,7 +276,9 @@ final class AppModel: ObservableObject, RelayHandler {
         guard !helperBusy else { return }
         helperBusy = true
         Task {
+            ActivityLog.shared.record("helper", "Installing helper (administrator prompt)")
             let (ok, msg) = await helper.install()
+            ActivityLog.shared.record("helper", ok ? "Helper installed" : "Helper install failed: \(msg)")
             helperBusy = false
             refreshHelperStatus()
             if !ok { helperStatusText = msg.contains("-128") ? "Cancelled" : "Install failed: \(msg)" }
@@ -247,6 +290,7 @@ final class AppModel: ObservableObject, RelayHandler {
         helperBusy = true
         Task {
             let (ok, msg) = await helper.uninstall()
+            ActivityLog.shared.record("helper", ok ? "Helper uninstalled" : "Helper uninstall failed: \(msg)")
             helperBusy = false
             refreshHelperStatus()
             if !ok { helperStatusText = msg.contains("-128") ? "Cancelled" : "Uninstall failed: \(msg)" }
@@ -264,9 +308,12 @@ final class AppModel: ObservableObject, RelayHandler {
 
     /// Synchronous restore used by applicationWillTerminate and signal handlers.
     func emergencyRestore() {
+        ActivityLog.shared.record("app", "NeverSleep quitting: resuming paused apps and re-enabling sleep")
         engine.resumeAllNow()
         if store.load().sleepDisabled || SystemProcessController.isSleepDisabledSystemWide() == true {
-            if helper.setDisableSleepSync(false) {
+            let ok = helper.setDisableSleepSync(false)
+            ActivityLog.shared.record("sleep", ok ? "Sleep re-enabled on quit" : "Could not re-enable sleep on quit (helper will restore it when the connection drops)")
+            if ok {
                 var s = store.load()
                 s.sleepDisabled = false
                 store.save(s)
@@ -294,7 +341,11 @@ final class AppModel: ObservableObject, RelayHandler {
             d["pausedBy"] = pausedByPID[app.pid]?.source.rawValue ?? NSNull()
             d["allowed"] = app.bundleID.map(allowList.contains) ?? false
             d["quitInsteadOfPause"] = app.bundleID.map(quitInsteadOfPause.contains) ?? false
-            d["protected"] = !engine.shouldFreeze(app) && !(app.bundleID.map(allowList.contains) ?? false)
+            let protected = engine.config.protectedPIDs.contains(app.pid)
+                || (app.bundleID.map(engine.config.protectedBundleIDs.contains) ?? false)
+            d["protected"] = protected
+            let keep = engine.keepReason(app)
+            d["keptBecause"] = (keep != nil && !protected && !(app.bundleID.map(allowList.contains) ?? false)) ? keep! : NSNull()
             return d
         }
         var reason: Any = NSNull()
@@ -327,6 +378,9 @@ final class AppModel: ObservableObject, RelayHandler {
                 "appVersion": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev",
                 "os": ProcessInfo.processInfo.operatingSystemVersionString,
             ],
+            "events": ActivityLog.shared.recent.suffix(40).map {
+                ["t": Int($0.date.timeIntervalSince1970 * 1000), "kind": $0.kind, "msg": String($0.message.prefix(300))]
+            },
             "sentAt": Int(Date().timeIntervalSince1970 * 1000),
         ]
     }
@@ -343,6 +397,37 @@ final class AppModel: ObservableObject, RelayHandler {
     }
 
     func relayHandle(_ cmd: RemoteCommand) async throws -> [String: Any]? {
+        if cmd != .refresh && cmd != .listInstalledApps {
+            ActivityLog.shared.record("remote", "Dashboard command: \(Self.describe(cmd))")
+        }
+        do {
+            return try await handleCommand(cmd)
+        } catch {
+            ActivityLog.shared.record("remote", "Dashboard command failed: \(Self.describe(cmd)) — \(error.localizedDescription)")
+            throw error
+        }
+    }
+
+    private static func describe(_ cmd: RemoteCommand) -> String {
+        func app(_ pid: Int32) -> String {
+            let a = NSRunningApplication(processIdentifier: pid)
+            return "\(a?.localizedName ?? "?") [\(a?.bundleIdentifier ?? "-")] pid \(pid)"
+        }
+        switch cmd {
+        case .refresh: return "refresh"
+        case .listInstalledApps: return "list installed apps"
+        case .quitApp(let pid): return "quit \(app(pid))"
+        case .forceQuitApp(let pid): return "force quit \(app(pid))"
+        case .pauseApp(let pid): return "pause \(app(pid))"
+        case .resumeApp(let pid): return "resume \(app(pid))"
+        case .launchApp(let bid): return "open \(bid)"
+        case .setLidMode(let on): return "lid mode \(on ? "on" : "off")"
+        case .setAllowList(let ids): return "set allow-list (\(ids.count) apps): \(ids.joined(separator: ", "))"
+        case .setQuitInsteadOfPause(let bid, let on): return "quit-instead \(on ? "on" : "off") for \(bid)"
+        }
+    }
+
+    private func handleCommand(_ cmd: RemoteCommand) async throws -> [String: Any]? {
         switch cmd {
         case .refresh:
             return nil
@@ -374,7 +459,7 @@ final class AppModel: ObservableObject, RelayHandler {
             _ = try await NSWorkspace.shared.openApplication(at: url, configuration: cfg)
             return nil
         case .setLidMode(let on):
-            setLidMode(on)
+            setLidMode(on, source: "dashboard")
             return nil
         case .setAllowList(let ids):
             setAllowList(ids)

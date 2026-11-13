@@ -7,7 +7,8 @@ import NeverSleepCore
 /// (fires on clamshell changes, among other power messages) and also polls every 2 s as a
 /// fallback, because interest messages are not guaranteed for every hardware/OS combination.
 final class LidMonitor {
-    var onChange: ((Bool) -> Void)?
+    /// (closed, source) where source is "IOKit notification" or "2 s poll".
+    var onChange: ((Bool, String) -> Void)?
     private(set) var isClosed: Bool = false
     private var port: IONotificationPortRef?
     private var notifier: io_object_t = 0
@@ -34,18 +35,18 @@ final class LidMonitor {
             let refcon = Unmanaged.passUnretained(self).toOpaque()
             IOServiceAddInterestNotification(p, root, kIOGeneralInterest, { refcon, _, _, _ in
                 guard let refcon else { return }
-                Unmanaged<LidMonitor>.fromOpaque(refcon).takeUnretainedValue().poll()
+                Unmanaged<LidMonitor>.fromOpaque(refcon).takeUnretainedValue().poll(source: "IOKit notification")
             }, refcon, &notifier)
         }
-        timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.poll() }
+        timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.poll(source: "2 s poll") }
         timer?.tolerance = 0.5
     }
 
-    func poll() {
+    func poll(source: String) {
         guard let closed = Self.readClamshellClosed(root: root == 0 ? nil : root) else { return }
         if closed != isClosed {
             isClosed = closed
-            onChange?(closed)
+            onChange?(closed, source)
         }
     }
 

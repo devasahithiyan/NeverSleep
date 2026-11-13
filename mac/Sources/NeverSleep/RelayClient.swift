@@ -29,7 +29,17 @@ final class RelayClient: NSObject, ObservableObject {
         }
     }
 
-    @Published private(set) var status: Status = .notPaired
+    @Published private(set) var status: Status = .notPaired {
+        didSet {
+            guard oldValue != status else { return }
+            switch status {
+            case .connected: ActivityLog.shared.record("remote", "Connected to relay")
+            case .disconnected(let why) where oldValue == .connected:
+                ActivityLog.shared.record("remote", "Disconnected from relay: \(why)")
+            default: break
+            }
+        }
+    }
     @Published private(set) var pairingCode: String?
     @Published private(set) var pairingError: String?
     @Published private(set) var credentials: DeviceCredentials?
@@ -121,6 +131,7 @@ final class RelayClient: NSObject, ObservableObject {
                         guard Keychain.save(creds) else { throw RelayError(message: "Could not save to Keychain") }
                         self.credentials = creds
                         self.pairingCode = nil
+                        ActivityLog.shared.record("remote", "Paired with relay \(base.host ?? "")")
                         self.connect()
                         return
                     }
@@ -260,6 +271,9 @@ final class RelayClient: NSObject, ObservableObject {
                 let data = try await handler.relayHandle(cmd)
                 send(["type": "result", "id": id, "ok": true, "data": data ?? [:]])
             } catch {
+                if error is RemoteCommand.ParseError {
+                    ActivityLog.shared.record("remote", "Rejected dashboard command '\(cmdName.prefix(40))': \(error)")
+                }
                 send(["type": "result", "id": id, "ok": false, "error": String(describing: error).prefix(300).description])
             }
             sendState()
@@ -279,6 +293,7 @@ final class RelayClient: NSObject, ObservableObject {
             }
         case "browsersRevoked":
             browserNotice = "All browsers were signed out."
+            ActivityLog.shared.record("remote", "All browsers signed out")
         case "revoked":
             unpair()
         default:
