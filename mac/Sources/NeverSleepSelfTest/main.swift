@@ -56,6 +56,13 @@ func main() async {
     await run("manualPauseRejectsSelfAndProtected") { t.manualPauseRejectsSelfAndProtected() }
     await run("pidReuseIsNotResumed") { await t.pidReuseIsNotResumed() }
     await run("recoversLeftoverStateFromCrash") { await t.recoversLeftoverStateFromCrash() }
+    let h = HoldWhileArmedTests()
+    await run("holdsSleepFromArmToDisarm") { await h.holdsSleepFromArmToDisarm() }
+    await run("cutoffWithLidClosedSleepsTheMac") { await h.cutoffWithLidClosedSleepsTheMac() }
+    await run("closingLidWhileUnsafeSleepsTheMac") { await h.closingLidWhileUnsafeSleepsTheMac() }
+    await run("lowBatteryWithLidOpenOnlyReleases") { await h.lowBatteryWithLidOpenOnlyReleases() }
+    await run("keepsHelpersOfAllowedApps") { await h.keepsHelpersOfAllowedApps() }
+    await run("logsEveryDecision") { await h.logsEveryDecision() }
     let r = RemoteCommandTests()
     await run("parsesValidCommands") { try r.parsesValidCommands() }
     await run("rejectsEverythingElse") { r.rejectsEverythingElse() }

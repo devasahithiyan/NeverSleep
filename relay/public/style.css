@@ -112,3 +112,9 @@ details[open] summary { margin-bottom: 10px; }
 }
 .steps { margin: 6px 0 10px; padding-left: 20px; }
 .steps li { margin: 4px 0; }
+.activity { list-style: none; margin: 8px 0 0; padding: 0; max-height: 320px; overflow-y: auto; font-size: 14px; }
+.activity li { display: flex; gap: 8px; padding: 5px 0; border-top: 1px solid var(--border); }
+.activity li:first-child { border-top: 0; }
+.activity time { color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
+.activity .k { font-size: 11px; color: var(--muted); background: var(--chip); border-radius: 99px; padding: 1px 7px; height: fit-content; flex: none; }
+.activity .bad { color: var(--danger); }

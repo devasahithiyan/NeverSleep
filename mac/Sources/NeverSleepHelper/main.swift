@@ -14,6 +14,27 @@ import os
 let log = Logger(subsystem: NeverSleepIDs.helperLabel, category: "helper")
 let markerDir = URL(fileURLWithPath: "/Library/Application Support/NeverSleep", isDirectory: true)
 let markerFile = markerDir.appendingPathComponent("disablesleep.on")
+let logFile = URL(fileURLWithPath: "/Library/Logs/NeverSleep/helper.log")
+
+/// Notice-level unified log + /Library/Logs/NeverSleep/helper.log (world-readable, rotated at 512 KB).
+func record(_ message: String) {
+    log.notice("\(message, privacy: .public)")
+    let fm = FileManager.default
+    try? fm.createDirectory(at: logFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+    if let size = (try? fm.attributesOfItem(atPath: logFile.path))?[.size] as? NSNumber, size.intValue > 512_000 {
+        let old = logFile.deletingPathExtension().appendingPathExtension("1.log")
+        try? fm.removeItem(at: old)
+        try? fm.moveItem(at: logFile, to: old)
+    }
+    let f = ISO8601DateFormatter()
+    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    f.timeZone = .current
+    let line = "\(f.string(from: Date())) \(message)\n"
+    let fd = open(logFile.path, O_WRONLY | O_APPEND | O_CREAT, 0o644)
+    guard fd >= 0 else { return }
+    _ = line.withCString { write(fd, $0, strlen($0)) }
+    close(fd)
+}
 
 @discardableResult
 func runPmset(disable: Bool) -> (Bool, String?) {
@@ -49,8 +70,8 @@ final class HelperService: NSObject, NeverSleepHelperProtocol {
 
     func setDisableSleep(_ disabled: Bool, withReply reply: @escaping (Bool, String?) -> Void) {
         let pid = connection?.processIdentifier ?? -1
-        log.info("setDisableSleep(\(disabled)) from pid \(pid)")
         let (ok, err) = runPmset(disable: disabled)
+        record("setDisableSleep(\(disabled)) from pid \(pid): \(ok ? "ok" : "FAILED \(err ?? "")")")
         if ok { holdsDisable = disabled }
         reply(ok, err)
     }
@@ -61,7 +82,7 @@ final class ListenerDelegate: NSObject, NSXPCListenerDelegate {
 
     override init() {
         let exe = CodeRequirement.currentExecutableURL()
-        log.notice("helper starting from \(exe?.path ?? "?", privacy: .public)")
+        record("helper starting (pid \(getpid())) from \(exe?.path ?? "?")")
         if let exe, let app = CodeRequirement.enclosingAppBundle(ofExecutable: exe) {
             // Registered with SMAppService: live inside NeverSleep.app, trust that bundle's signer.
             requirement = CodeRequirement.designatedRequirement(of: app)
@@ -72,9 +93,9 @@ final class ListenerDelegate: NSObject, NSXPCListenerDelegate {
         }
         super.init()
         if let r = requirement {
-            log.notice("client requirement: \(r, privacy: .public)")
+            record("accepting clients that satisfy: \(r)")
         } else {
-            log.error("could not read the enclosing app's code requirement; refusing all clients")
+            record("ERROR: no client requirement found; refusing all clients")
         }
     }
 
@@ -91,7 +112,7 @@ final class ListenerDelegate: NSObject, NSXPCListenerDelegate {
 
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection conn: NSXPCConnection) -> Bool {
         guard let requirement else {
-            log.error("rejecting pid \(conn.processIdentifier): no client requirement")
+            record("rejecting pid \(conn.processIdentifier): no client requirement")
             return false
         }
         // The kernel/XPC runtime enforces this on every message, using the audit token,
@@ -103,20 +124,21 @@ final class ListenerDelegate: NSObject, NSXPCListenerDelegate {
         conn.exportedObject = service
         let restore = { [weak service] in
             guard let service, service.holdsDisable else { return }
-            log.notice("client went away while sleep was disabled; re-enabling sleep")
+            record("client went away while sleep was disabled; re-enabling sleep")
             runPmset(disable: false)
             service.holdsDisable = false
         }
         conn.invalidationHandler = restore
         conn.interruptionHandler = restore
         conn.resume()
+        record("client connected: pid \(conn.processIdentifier) (signature checked on every message)")
         return true
     }
 }
 
 // Leftover from a crash of the helper itself or a reboot while lid mode was active.
 if FileManager.default.fileExists(atPath: markerFile.path) {
-    log.notice("found stale disablesleep marker; re-enabling sleep")
+    record("found stale disablesleep marker; re-enabling sleep")
     runPmset(disable: false)
 }
 

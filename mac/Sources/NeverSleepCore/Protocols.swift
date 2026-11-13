@@ -11,6 +11,8 @@ public protocol ProcessControlling: AnyObject {
     func runningRegularApps() -> [RunningApp]
     /// Kernel start time of `pid` (microseconds since epoch), nil if it no longer exists.
     func startTime(of pid: Int32) -> UInt64?
+    /// Parent process ID, nil if unknown. Used to keep apps launched by an allowed app running.
+    func parentPID(of pid: Int32) -> Int32?
     func sendStop(_ pid: Int32) -> Bool
     func sendCont(_ pid: Int32) -> Bool
     /// Ask the app to quit normally (like Cmd-Q).

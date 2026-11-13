@@ -211,6 +211,7 @@ function render() {
 
   renderApps(s, online);
   renderAllow(s);
+  renderActivity(s);
 }
 
 function renderApps(s, online) {
@@ -221,6 +222,7 @@ function renderApps(s, online) {
     if (a.paused) tags.push(el("span", { class: "tag paused" }, a.pausedBy === "manual" ? "paused" : "paused (lid)"));
     if (a.allowed) tags.push(el("span", { class: "tag allowed" }, "allowed"));
     if (a.protected) tags.push(el("span", { class: "tag" }, "system"));
+    if (a.keptBecause) tags.push(el("span", { class: "tag allowed" }, a.keptBecause));
     const actions = [];
     if (!a.protected) {
       actions.push(a.paused
@@ -237,6 +239,17 @@ function renderApps(s, online) {
       el("div", { class: "actions" }, actions));
   });
   $("appList").replaceChildren(...(items.length ? items : [el("li", { class: "muted" }, online ? "No apps" : "Waiting for the Mac…")]));
+}
+
+function renderActivity(s) {
+  const events = (s.events || []).slice().reverse();
+  const fmt = (t) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  $("activityList").replaceChildren(...(events.length
+    ? events.map((e) => el("li", {},
+        el("time", {}, fmt(e.t)),
+        el("span", { class: "k" }, e.kind),
+        el("span", { class: e.kind === "error" || e.kind === "safety" ? "bad" : "" }, e.msg)))
+    : [el("li", { class: "muted" }, "No activity yet")]));
 }
 
 // ---------- installed apps (launch + allow-list) ----------

@@ -106,6 +106,33 @@ pmset -g | grep SleepDisabled    # → 1 while active
 
 Turn the toggle off and everything resumes. Then try a real lid close on a desk before trusting it in a bag.
 
+## Logs: what happened while the lid was closed?
+
+Every decision is logged, both to a file and to the unified log (at notice level):
+
+```bash
+tail -f ~/Library/Logs/NeverSleep/activity.log        # app: lid, sleep, apps, safety, remote commands
+cat /Library/Logs/NeverSleep/helper.log               # root helper: every setDisableSleep call + result
+log show --last 2h --predicate 'subsystem BEGINSWITH "com.neversleep"'
+```
+
+The log records:
+- lid closed or opened, and how it was detected
+- lid mode armed or disarmed, and from where
+- each `pmset disablesleep` change
+- every app kept, paused, resumed or quit, with its bundle ID, PID and the reason
+- battery and thermal cutoffs, and watchdog recoveries
+- dashboard commands
+
+The latest entries also appear in the menu, in Settings → Activity, and on the dashboard.
+
+## Reliability notes
+
+- **Sleep is held while armed** (default). `disablesleep 1` is set as soon as lid mode is on, not when the lid closes, so macOS can never start clamshell sleep before NeverSleep reacts. The trade-off: the Mac won't idle-sleep while lid mode is on. You can turn this off in Settings → Safety → Reliability.
+- **Helpers of allowed apps keep running.** These are apps launched by an allowed app (found via the parent-process chain), and apps whose bundle ID sits under an allowed one (`com.foo.app.helper`).
+- **CLI agents need their terminal allowed.** A paused Terminal or iTerm eventually blocks the agent running inside it, once the output buffer fills.
+- **Open at login** (default on) installs `~/Library/LaunchAgents/com.neversleep.app.plist`, which also relaunches NeverSleep if it crashes.
+
 ## Menu bar states
 
 | Icon | State |
@@ -154,7 +181,7 @@ openssl rand -hex 32 | npx wrangler secret put SESSION_SECRET
 - **The dashboard needs the Mac online.** If the network drops, the dashboard shows the Mac as offline with a last-seen time. The app reconnects automatically.
 - **Whole-system setting.** While lid mode is active, the Mac doesn't idle-sleep either.
 - **Ad-hoc signing.** Builds are ad-hoc signed, which is fine for your own Mac. After each rebuild, the helper is reinstalled (one password prompt) and macOS may ask once to allow Keychain access. Sign with a Developer ID (`SIGN_IDENTITY=...`) to distribute binaries.
-- **Testing so far.** Lid logic is covered by unit tests and the *Simulate lid closed* mode. Please report results from real lid closes on different Mac models.
+- **Testing so far.** Verified with a real lid close (11+ minutes on battery, no sleep, apps paused and resumed) on an Apple Silicon MacBook running macOS 27, plus unit tests and *Simulate lid closed*. Please report results from other Mac models.
 
 ## Development
 

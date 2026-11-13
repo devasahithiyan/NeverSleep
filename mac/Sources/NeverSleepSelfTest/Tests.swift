@@ -17,6 +17,7 @@ final class FakeProcs: ProcessControlling {
     var log: [String] = []
     var quitRequested: [Int32] = []
     var startTimes: [Int32: UInt64] = [:]
+    var parents: [Int32: Int32] = [:]
     var systemSleeps = 0
 
     func add(_ pid: Int32, _ bid: String) {
@@ -25,6 +26,7 @@ final class FakeProcs: ProcessControlling {
     }
     func runningRegularApps() -> [RunningApp] { apps }
     func startTime(of pid: Int32) -> UInt64? { startTimes[pid] }
+    func parentPID(of pid: Int32) -> Int32? { parents[pid] }
     func sendStop(_ pid: Int32) -> Bool { stopped.insert(pid); log.append("STOP \(pid)"); return true }
     func sendCont(_ pid: Int32) -> Bool { stopped.remove(pid); log.append("CONT \(pid)"); return true }
     func requestQuit(_ pid: Int32) -> Bool { quitRequested.append(pid); return true }
@@ -40,6 +42,7 @@ struct LidModeEngineTests {
         var cfg = LidModeConfig()
         cfg.allowList = ["com.allowed"]
         cfg.protectedPIDs = [10]
+        cfg.keepAwakeWhileArmed = false   // classic mode; the hold-while-armed tests opt in
         configure(&cfg)
         let s = FakeSleep(), p = FakeProcs(), st = MemoryStateStore()
         p.add(10, "com.neversleep.app")
@@ -190,6 +193,100 @@ struct LidModeEngineTests {
         expect(p.stopped.isEmpty)
         expect(s.calls == [false])
         expect(st.state == PersistedState())
+    }
+}
+
+@MainActor
+struct HoldWhileArmedTests {
+    let base = LidModeEngineTests()
+
+    func make() -> (LidModeEngine, FakeSleep, FakeProcs, MemoryStateStore, [ActivityEvent]) {
+        let (e, s, p, st) = base.make { $0.keepAwakeWhileArmed = true }
+        return (e, s, p, st, [])
+    }
+
+    func holdsSleepFromArmToDisarm() async {
+        let (e, s, p, _, _) = make()
+        e.setEnabled(true); await e.settle()
+        expect(e.phase == .armed)
+        expect(s.calls == [true])               // held before the lid ever closes
+        expect(p.stopped.isEmpty)
+        e.setLidClosed(true); await e.settle()
+        expect(e.phase == .active)
+        expect(s.calls == [true])               // no helper call needed at lid close
+        expect(p.stopped == [30, 50])
+        e.setLidClosed(false); await e.settle()
+        expect(e.phase == .armed && p.stopped.isEmpty)
+        expect(s.calls == [true])               // still held while armed
+        e.setEnabled(false); await e.settle()
+        expect(e.phase == .off && s.calls == [true, false])
+    }
+
+    func cutoffWithLidClosedSleepsTheMac() async {
+        let (e, s, p, _, _) = make()
+        e.updatePower(PowerReading(batteryPercent: 60, onACPower: false))
+        e.setEnabled(true); e.setLidClosed(true); await e.settle()
+        e.updatePower(PowerReading(batteryPercent: 10, onACPower: false)); await e.settle()
+        expect(e.phase.name == "cutoff")
+        expect(p.stopped.isEmpty)
+        expect(s.calls == [true, false])
+        expect(p.systemSleeps == 1)
+    }
+
+    func closingLidWhileUnsafeSleepsTheMac() async {
+        // Hold was on while armed; lid closes with battery already low → release and sleep.
+        let (e, s, p, _, _) = make()
+        e.updatePower(PowerReading(batteryPercent: 60, onACPower: false))
+        e.setEnabled(true); await e.settle()
+        e.updatePower(PowerReading(batteryPercent: 10, onACPower: false))
+        e.setLidClosed(true); await e.settle()
+        expect(e.phase.name == "cutoff")
+        expect(s.calls == [true, false])
+        expect(p.systemSleeps == 1)
+        expect(p.stopped.isEmpty)
+    }
+
+    func lowBatteryWithLidOpenOnlyReleases() async {
+        let (e, s, p, _, _) = make()
+        e.updatePower(PowerReading(batteryPercent: 60, onACPower: false))
+        e.setEnabled(true); await e.settle()
+        e.updatePower(PowerReading(batteryPercent: 10, onACPower: false)); await e.settle()
+        expect(e.phase == .armed)
+        expect(s.calls == [true, false])
+        expect(p.systemSleeps == 0)
+        e.updatePower(PowerReading(batteryPercent: 10, onACPower: true)); await e.settle()
+        expect(s.calls == [true, false, true])  // plugged in: hold again
+    }
+
+    func keepsHelpersOfAllowedApps() async {
+        let (e, _, p, _, _) = make()
+        p.add(60, "com.allowed.helper")         // bundle-ID prefix of an allowed app
+        p.add(70, "com.unrelated.tool")         // launched directly by allowed app 20
+        p.parents[70] = 20
+        p.add(80, "com.deep.child")             // launched via a non-app process (900) of app 20
+        p.parents[80] = 900; p.parents[900] = 20
+        p.add(90, "com.allowedish")             // similar name, NOT a prefix match
+        e.setEnabled(true); e.setLidClosed(true); await e.settle()
+        expect(!p.stopped.contains(60))
+        expect(!p.stopped.contains(70))
+        expect(!p.stopped.contains(80))
+        expect(p.stopped.contains(90))
+        expect(e.keepReason(RunningApp(pid: 60, bundleID: "com.allowed.helper", name: "h"))?.contains("helper") == true)
+    }
+
+    func logsEveryDecision() async {
+        let (e, _, _, _, _) = make()
+        var events: [ActivityEvent] = []
+        e.onEvent = { events.append($0) }
+        e.setEnabled(true); e.setLidClosed(true); await e.settle()
+        e.setLidClosed(false); await e.settle()
+        let text = events.map { "\($0.kind): \($0.message)" }
+        expect(text.contains { $0.hasPrefix("mode: Lid mode armed") })
+        expect(text.contains { $0.contains("Sleep disabled") })
+        expect(text.contains { $0.contains("Paused: com.other") })
+        expect(text.contains { $0.contains("Kept running: com.allowed") && $0.contains("on allow-list") })
+        expect(text.contains { $0.contains("Resumed: com.other") && $0.contains("lid opened") })
+        expect(text.contains { $0.contains("Engaged:") })
     }
 }
 

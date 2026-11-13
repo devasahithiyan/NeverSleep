@@ -56,6 +56,8 @@ struct MenuContentView: View {
             }
 
             Divider()
+            RecentActivityView(limit: 4)
+            Divider()
             Toggle("Simulate lid closed (debug)", isOn: Binding(
                 get: { model.simulateLidClosed }, set: { model.setSimulateLidClosed($0) }))
                 .font(.caption)
@@ -100,6 +102,7 @@ struct SettingsView: View {
             SafetyView().tabItem { Label("Safety", systemImage: "thermometer.medium") }
             RemoteView().tabItem { Label("Remote", systemImage: "antenna.radiowaves.left.and.right") }
             HelperView().tabItem { Label("Helper", systemImage: "lock.shield") }
+            ActivityTabView().tabItem { Label("Activity", systemImage: "list.bullet.rectangle") }
         }
         .padding()
     }
@@ -150,7 +153,7 @@ struct AllowListView: View {
 
     var body: some View {
         VStack(alignment: .leading) {
-            Text("Checked apps keep running while the lid is closed. Every other app is paused (SIGSTOP) and resumed when you open the lid, or quit if you choose “Quit instead”.")
+            Text("Checked apps keep running while the lid is closed. Apps they launch, and their helper apps (bundle IDs under theirs), keep running too. Every other app is paused (SIGSTOP) and resumed when you open the lid, or quit if you choose “Quit instead”. Tip: a CLI agent in Terminal needs Terminal checked — a paused terminal stops the agent once its output buffer fills.")
                 .font(.callout).foregroundStyle(.secondary)
             TextField("Search apps", text: $searchBox.text).textFieldStyle(.roundedBorder)
             List(rows) { row in
@@ -195,6 +198,14 @@ struct SafetyView: View {
             Section("Heat") {
                 Text("If macOS reports serious or critical thermal pressure, NeverSleep resumes all apps, re-enables sleep and puts the Mac to sleep. Current: \(model.thermal.name).")
                     .font(.callout)
+            }
+            Section("Reliability") {
+                Toggle("Keep the Mac awake for the whole time lid mode is on (recommended)",
+                       isOn: Binding(get: { model.keepAwakeWhileArmed }, set: { model.setKeepAwakeWhileArmed($0) }))
+                Text("Sleep stays disabled from the moment you switch lid mode on, so closing the lid can never race NeverSleep. The Mac won't idle-sleep while lid mode is on; the battery and heat cutoffs still apply. Off: sleep is only disabled after the lid closes.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Toggle("Open NeverSleep at login",
+                       isOn: Binding(get: { model.openAtLogin }, set: { model.setOpenAtLogin($0) }))
             }
             Section("Display") {
                 Toggle("Turn the display off when lid mode engages",
@@ -284,5 +295,60 @@ struct HelperView: View {
         }
         .formStyle(.grouped)
         .onAppear { model.refreshHelperStatus() }
+    }
+}
+
+private let activityTime: DateFormatter = {
+    let f = DateFormatter()
+    f.dateFormat = "HH:mm:ss"
+    return f
+}()
+
+struct RecentActivityView: View {
+    @ObservedObject private var log = ActivityLog.shared
+    let limit: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Text("Recent activity").font(.caption).bold()
+                Spacer()
+                Button("Open log") { NSWorkspace.shared.open(ActivityLog.fileURL) }
+                    .buttonStyle(.link).font(.caption)
+            }
+            if log.recent.isEmpty {
+                Text("Nothing yet").font(.caption2).foregroundStyle(.secondary)
+            }
+            ForEach(log.recent.suffix(limit).reversed()) { e in
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(activityTime.string(from: e.date)).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                    Text(e.message).font(.caption2).lineLimit(2)
+                        .foregroundStyle(e.kind == "error" || e.kind == "safety" ? Color.red : Color.primary)
+                }
+            }
+        }
+    }
+}
+
+struct ActivityTabView: View {
+    @ObservedObject private var log = ActivityLog.shared
+
+    var body: some View {
+        VStack(alignment: .leading) {
+            HStack {
+                Text("Everything NeverSleep decides is logged to ~/Library/Logs/NeverSleep/activity.log (helper: /Library/Logs/NeverSleep/helper.log).")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([ActivityLog.fileURL]) }
+            }
+            List(log.recent.reversed()) { e in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(activityTime.string(from: e.date)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    Text(e.kind).font(.caption2).padding(.horizontal, 5).background(.quaternary, in: Capsule())
+                    Text(e.message).font(.caption).textSelection(.enabled)
+                        .foregroundStyle(e.kind == "error" || e.kind == "safety" ? Color.red : Color.primary)
+                }
+            }
+        }
     }
 }
